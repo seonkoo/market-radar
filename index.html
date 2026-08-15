@@ -86,6 +86,14 @@ nav.bottom button.active{color:var(--accent);}
 .compass .dri{font-size:12px;color:#9fb0c3;margin-top:10px;line-height:1.7;}
 .compass .dri b.up{color:#3fb950;} .compass .dri b.down{color:#f85149;}
 .compass .r-on{color:#3fb950;} .compass .r-off{color:#f85149;} .compass .r-flat{color:#d29922;}
+/* 每日要闻 */
+.brief-item{display:flex;gap:8px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line);}
+.brief-item:last-child{border-bottom:none;}
+.bdir{font-size:11px;font-weight:700;flex:0 0 auto;padding:3px 7px;border-radius:7px;margin-top:1px;white-space:nowrap;}
+.bdir.up{color:#3fb950;background:rgba(63,185,80,.12);}
+.bdir.down{color:#f85149;background:rgba(248,81,73,.12);}
+.bdir.flatc{color:#d29922;background:rgba(210,153,34,.12);}
+.b-summary{font-size:12.5px;line-height:1.7;color:#cdd9e5;background:#161d28;border:1px solid #2a3445;border-radius:10px;padding:9px 11px;margin:10px 0;}
 </style>
 </head>
 <body>
@@ -110,7 +118,14 @@ nav.bottom button.active{color:var(--accent);}
       <div id="regimeHome"><span class="hint">新闻扫描后显示…</span></div>
     </div>
     <div class="card">
-      <h3>📮 今日方向 <span class="tag">每日 08:00 / 15:00 自动抓取快照</span></h3>
+      <h3>📋 每日要闻 <span class="tag">服务器 08:30 / 22:00 自动更新</span></h3>
+      <div id="briefHomeMeta" class="hint">读取中…</div>
+      <div id="briefHomeRegime"></div>
+      <div id="briefHomeSummary" class="b-summary"></div>
+      <div id="briefHomeList"></div>
+    </div>
+    <div class="card">
+      <h3>📮 今日方向 <span class="tag">每日 08:30 / 22:00 自动抓取快照</span></h3>
       <div id="reportMeta" class="hint">打开页面即拉取实时数据</div>
       <div id="reportBox">正在加载…</div>
       <div class="row">
@@ -208,6 +223,17 @@ nav.bottom button.active{color:var(--accent);}
   </section>
 
   <section class="tab" id="tab-news">
+    <div class="card">
+      <h3>📋 每日要闻 <span class="tag">服务器 08:30 / 22:00 自动更新</span></h3>
+      <div id="briefMeta" class="hint">读取中…</div>
+      <div id="briefRegime"></div>
+      <div id="briefSummary" class="b-summary"></div>
+      <div id="briefList"></div>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn" id="btnBrief">🔄 实时生成要闻</button>
+      </div>
+      <div class="hint" style="margin-top:8px;">机器按词库筛选+分组（进攻/平缓/避险），非人写研判，仅供参考；方向按关键词宏观轴+否定词判定，个别标题可能误标。</div>
+    </div>
     <div class="card">
       <h3>🧭 市场情绪罗盘 <span class="tag">新闻关键词聚合 · 参考</span></h3>
       <div id="regimeBox"><span class="hint">新闻扫描后显示…</span></div>
@@ -497,7 +523,13 @@ async function scanNews(){
     try{
       var data=await jsonpGet(src.url,10000,'callback');
       var arr=(data&&data.result&&data.result.data)?data.result.data:[];
-      arr.forEach(function(it){var t=[it.title,it.intro,it.content,it.summary].filter(Boolean).join(' ');if(t)parts.push({t:t,src:src.name,w:src.weight||1});n++;});
+      arr.forEach(function(it){
+        var title=String(it.title||'');
+        var intro=String(it.intro||it.content||it.summary||'');
+        var t=[title,intro].filter(Boolean).join(' ');
+        if(t)parts.push({t:t,title:title,brief:intro.slice(0,120),src:src.name,w:src.weight||1,time:String(it.intime||it.ctime||'')});
+        n++;
+      });
       srcStat.push(src.name+'（'+n+'条）');
     }catch(e){srcStat.push(src.name+'（失败）');}
   }
@@ -542,6 +574,104 @@ function renderNews(){
   }).join('');
 }
 
+// ---- 每日要闻：服务端 brief.json / 客户端实时兜底 ----
+function fmtTs(s){var n=parseInt(s,10);if(!n)return '';try{var d=new Date(n*1000);return (d.getMonth()+1)+'-'+d.getDate()+' '+('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);}catch(e){return String(s||'');}}
+function itemScanJS(parts,lex){
+  var neg=lex.negators||[],den=lex.deniers||[],negTerms=lex.negTerms||[],strongNeg={};
+  (lex.strongNeg||[]).forEach(function(t){strongNeg[t]=1;});
+  var out=[];
+  (parts||[]).forEach(function(p){
+    var text=String(p.t||'');
+    var seen={},hits=[];
+    (lex.keywords||[]).forEach(function(k){
+      var pps=indicesOf(text,k.kw);if(!pps.length)return;
+      var pp=pps[0],before=text.slice(0,pp),dirn=k.dir;
+      if(dirn>0&&den.some(function(n){return before.indexOf(n)>=0;}))return;
+      if(dirn>0&&neg.some(function(n){return before.indexOf(n)>=0;}))dirn=-dirn;
+      if(seen[k.kw])return;seen[k.kw]=1;
+      hits.push({dir:dirn,macro:k.macro||0,w:k.w||1,secs:k.secs||[],kw:k.kw});
+    });
+    if(!hits.length)return;
+    var pos=hits.filter(function(h){return h.dir>0;}).reduce(function(a,h){return a+h.w;},0);
+    var negw=hits.filter(function(h){return h.dir<0;}).reduce(function(a,h){return a+h.w;},0);
+    var negCount=negTerms.filter(function(t){return text.indexOf(t)>=0;}).length;
+    var net=pos-negw-2*negCount;
+    var md=net>0?'on':(net<0?'off':'flat');
+    var denied=den.some(function(n){return text.indexOf(n)>=0;});
+    if((lex.strongNeg||[]).some(function(t){return text.indexOf(t)>=0;})&&!denied)md='off';
+    var secs=[];hits.forEach(function(h){h.secs.forEach(function(s){if(secs.indexOf(s)<0)secs.push(s);});});
+    var kws=Object.keys(seen);
+    out.push({title:p.title||text.slice(0,40),brief:p.brief||text.slice(0,120),src:p.src||'',time:fmtTs(p.time),weight:pos+negw,on:pos,off:negw,macro_dir:md,secs:secs,kws:kws});
+  });
+  out.sort(function(a,b){return b.weight-a.weight;});
+  return out;
+}
+function buildBriefFromItems(items,lex){
+  var top=items.slice(0,14),on=0,off=0,on_kw={},off_kw={};
+  items.forEach(function(m){on+=m.on;off+=m.off;m.kws.forEach(function(k){var mk=(lex.keywords||[]).filter(function(x){return x.kw===k;})[0];var mac=mk?mk.macro:0;if(mac===1)on_kw[k]=(on_kw[k]||0)+1;else if(mac===-1)off_kw[k]=(off_kw[k]||0)+1;});});
+  var total=on+off,net=on-off,ratio=total>0?net/total:0,regime,label,strength;
+  if(total<3){regime='flat';label='平缓（信号不足）';strength=0;}
+  else if(ratio>0.15){regime='on';label='进攻';strength=Math.min(1,ratio);}
+  else if(ratio<-0.15){regime='off';label='避险 / 下跌风险';strength=Math.min(1,Math.abs(ratio));}
+  else{regime='flat';label='平缓';strength=Math.abs(ratio);}
+  var onDrivers=Object.keys(on_kw).sort(function(a,b){return on_kw[b]-on_kw[a];}).slice(0,5);
+  var offDrivers=Object.keys(off_kw).sort(function(a,b){return off_kw[b]-off_kw[a];}).slice(0,5);
+  var sp=[];if(onDrivers.length)sp.push('进攻线索：'+onDrivers.join('、'));if(offDrivers.length)sp.push('避险线索：'+offDrivers.join('、'));
+  return {generated_at:'实时生成',source:'客户端实时扫描',regime:{regime:regime,label:label,onScore:on,offScore:off,strength:strength},summary:sp.length?sp.join('；'):'当日新闻未触发显著关键词信号。',items:top,fromServer:false};
+}
+function briefRegimeHtml(g){
+  if(!g)return '';
+  var col=g.regime==='on'?'r-on':(g.regime==='off'?'r-off':'r-flat');
+  var pct=Math.round((g.strength||0)*100);
+  var bar=g.regime==='on'?'<i class="'+col+'" style="left:50%;width:'+(pct/2)+'%;background:#3fb950;"></i>'
+        :g.regime==='off'?'<i class="'+col+'" style="right:50%;width:'+(pct/2)+'%;background:#f85149;"></i>'
+        :'<i class="r-flat" style="left:'+(50-pct/2)+'%;width:'+pct+'%;background:#d29922;"></i>';
+  return '<div class="compass"><div class="big '+col+'">'+esc(g.label)+'</div>'+
+    '<div class="sub">基调偏'+(g.regime==='on'?'风险偏好回升':(g.regime==='off'?'规避风险':'中性均衡'))+'，强度 '+pct+'%</div>'+
+    '<div class="bar">'+bar+'</div><div class="scale"><span>避险</span><span>平缓</span><span>进攻</span></div></div>';
+}
+function briefItemsHtml(items,limit){
+  if(!items||!items.length)return '<div class="empty">暂无命中关键词的新闻条目。</div>';
+  return items.slice(0,limit||14).map(function(m){
+    var dcls=m.macro_dir==='on'?'up':(m.macro_dir==='off'?'down':'flatc');
+    var dtag=m.macro_dir==='on'?'▲进攻':(m.macro_dir==='off'?'▼避险':'▬中性');
+    var secs=(m.secs||[]).slice(0,4).map(function(s){return esc(s);}).join('、');
+    var meta=[m.time,m.src].filter(Boolean).join(' · ');
+    return '<div class="brief-item"><span class="bdir '+dcls+'">'+dtag+'</span>'+
+      '<div style="flex:1;min-width:0;"><b>'+esc(m.title||'')+'</b>'+
+      (m.brief?'<div class="hint" style="margin-top:2px;">'+esc(m.brief)+'</div>':'')+
+      (secs?'<div class="hint" style="margin-top:2px;color:#7d8da3;">涉及：'+secs+'</div>':'')+
+      (meta?'<div class="hint" style="margin-top:1px;color:#5e6b7d;">'+esc(meta)+'</div>':'')+
+      '</div></div>';
+  }).join('');
+}
+function renderBrief(b){
+  if(!b)return;state.brief=b;
+  var meta=$('briefMeta');if(meta)meta.innerHTML='生成于 <b>'+esc(b.generated_at||'')+'</b> · '+(b.fromServer===false?'<span style="color:#d29922;">实时</span>':'<span style="color:#3fb950;">服务器快照</span>')+(b.source?' · '+esc(b.source):'');
+  var rg=$('briefRegime');if(rg)rg.innerHTML=briefRegimeHtml(b.regime);
+  var sm=$('briefSummary');if(sm)sm.innerHTML='<b>今日综述：</b>'+esc(b.summary||'');
+  var ls=$('briefList');if(ls)ls.innerHTML=briefItemsHtml(b.items,14);
+  var hm=$('briefHomeMeta');if(hm)hm.innerHTML=(b.fromServer===false?'实时生成':'生成于 '+esc(b.generated_at||''))+(b.source?' · '+esc(b.source):'');
+  var hr=$('briefHomeRegime');if(hr)hr.innerHTML=briefRegimeHtml(b.regime);
+  var hs=$('briefHomeSummary');if(hs)hs.innerHTML='<b>今日综述：</b>'+esc(b.summary||'');
+  var hl=$('briefHomeList');if(hl)hl.innerHTML=briefItemsHtml(b.items,5);
+}
+async function loadBrief(){
+  try{
+    var r=await fetch('./brief.json',{cache:'no-store'});
+    if(r.ok){var b=await r.json();if(b&&b.items&&b.items.length){b.fromServer=true;renderBrief(b);return;}}
+  }catch(e){}
+  if(state.news&&state.news.parts){var items=itemScanJS(state.news.parts,state.lexicon||DEFAULT_LEXICON);if(items.length){renderBrief(buildBriefFromItems(items,state.lexicon||DEFAULT_LEXICON));return;}}
+  var meta=$('briefMeta');if(meta)meta.innerHTML='要闻生成中/暂不可用，可点「实时生成要闻」。';
+}
+async function genBriefLive(){
+  if(!state.lexicon){toast('词库未就绪');return;}
+  if(!state.news||!state.news.parts){toast('请先扫描新闻');scanNews();return;}
+  var items=itemScanJS(state.news.parts,state.lexicon);
+  if(!items.length){toast('当前新闻未命中关键词');return;}
+  renderBrief(buildBriefFromItems(items,state.lexicon));toast('已实时生成要闻');
+}
+
 function bindEvents(){
   document.getElementById('nav').addEventListener('click',function(e){var b=e.target.closest('button[data-tab]');if(!b)return;
     document.querySelectorAll('nav.bottom button').forEach(function(x){x.classList.remove('active');});b.classList.add('active');
@@ -558,13 +688,15 @@ function bindEvents(){
   $('checkHistory').addEventListener('click',function(e){var b=e.target.closest('button[data-view]');if(!b)return;var c=state.checkData[b.dataset.view]||{};$('cPolicy').value=c.policy||'';$('cIndustry').value=c.industry||'';$('cFund').value=c.fund||'';$('cTech').value=c.tech||'';$('checkDate').textContent='查看 '+b.dataset.view;});
   $('btnScanNews').addEventListener('click',function(){if(state.lexicon)scanNews();else toast('词库未就绪');});
   $('btnLexicon').addEventListener('click',function(){window.open('./lexicon.json','_blank');});
+  $('btnBrief').addEventListener('click',genBriefLive);
 }
 window.addEventListener('error',function(e){console.error('JS错误',e.message);});
 try{
   bindEvents();renderCheck();renderAll();
   fetch('./snapshots/index.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){state.snapIndex=d;renderSnapInfo();}).catch(function(){});
   loadAll();
-  loadLexicon().then(scanNews);
+  loadLexicon().then(scanNews).then(function(){loadBrief();});
+  loadBrief();
 }catch(e){toast('启动出错：'+e.message);}
 </script>
 </body>
