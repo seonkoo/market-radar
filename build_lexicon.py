@@ -3,9 +3,29 @@ import json
 
 # 关键词条目: (kw, [secs], dir, w, cat)
 # dir: +1 利好 / -1 利空 ; w: 基础权重 1~3
+# macro: 宏观轴 +1=进攻(risk-on) / -1=避险(risk-off)，用于聚合"市场整体罗盘"
 KW = []
+
+# 纯避险资产（走强=恐慌/避险情绪升温，对应 risk-off）
+PURE_HAVEN = {"黄金", "国债"}
+# 字面利好但本质推动 risk-on 的关键词（覆盖默认规则的特例）
+OVERRIDE_ON = {"美联储降息", "美债收益率下行", "美元走弱", "中美缓和", "经贸协议", "软着陆"}
+# 字面或本质即 risk-off 的关键词（地缘紧张 / 系统性风险）
+OVERRIDE_OFF = {"地缘冲突", "中东局势", "俄乌", "台海紧张", "南海紧张", "评级下调",
+                "债务危机", "经济衰退", "千股跌停", "跌停潮", "暴雷", "财务造假",
+                "商誉减值", "退市风险", "被ST", "立案调查", "贸易战", "制裁",
+                "出口管制", "实体清单", "脱钩", "关税", "非农强劲"}
+
+def macro_of(kw, secs, d):
+    if kw in OVERRIDE_ON: return 1
+    if kw in OVERRIDE_OFF: return -1
+    if any(s in PURE_HAVEN for s in secs):
+        return -1 if d > 0 else 1   # 避险资产走强=恐慌(off)；走弱=风险偏好回升(on)
+    return 1 if d > 0 else -1
+
 def add(kw, secs, d, w, cat):
-    KW.append({"kw": kw, "secs": secs, "dir": d, "w": w, "cat": cat})
+    KW.append({"kw": kw, "secs": secs, "dir": d, "w": w, "cat": cat,
+               "macro": macro_of(kw, secs, d)})
 
 # ===== 货币 / 宏观 =====
 add("降准", ["银行","券商","地产","保险"], 1, 3, "货币")
@@ -191,7 +211,7 @@ add("回购", ["个股"], 1, 2, "资金")
 add("增持", ["个股"], 1, 1, "资金")
 
 lex = {
-    "_note": "市场关键词词库（配置化，可自由增删）。dir:+1利好/-1利空；w:权重1~3；secs:映射板块；cat:分类。negators翻转邻近利好词方向；deniers使利好失效。",
+    "_note": "市场关键词词库（配置化，可自由增删）。dir:+1利好/-1利空；w:权重1~3；secs:映射板块；cat:分类；macro:+1进攻(risk-on)/-1避险(risk-off)，用于聚合市场整体罗盘。negators翻转邻近利好词方向；deniers使利好失效。",
     "negatorWindow": 10,
     "negators": ["严查","严打","打击","查处","处罚","问责","整改","叫停","暂停","遏制","降温","调控","压降","收紧","限制","封杀","撤销","暂缓","收紧"],
     "deniers": ["暂未","尚未","未如期","未落地","未实施","未兑现","否认","落空","预期落空","并未","不再","无实质"],
