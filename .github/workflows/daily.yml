@@ -2,8 +2,8 @@ name: 每日板块资金雷达抓取
 
 on:
   schedule:
-    - cron: '0 0 * * *'   # 北京时间 08:00（东财盘前）
-    - cron: '0 7 * * *'   # 北京时间 15:00（东财收盘后）
+    - cron: '30 0 * * *'   # 北京时间 08:30（盘前）
+    - cron: '0 14 * * *'   # 北京时间 22:00（盘后）
   workflow_dispatch:       # 支持手动触发（首次建库后点一次即可立即启用 Pages）
 
 permissions:
@@ -27,12 +27,15 @@ jobs:
       - name: 抓取东方财富并生成快照
         run: python generate.py
 
-      - name: 提交快照（latest.json + 归档）
+      - name: 生成每日要闻简报
+        run: python brief.py
+
+      - name: 提交快照与简报（latest.json + brief.json + 归档）
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "chore: 数据快照 $(date +'%Y-%m-%d %H:%M %Z')" || echo "no changes"
+          git commit -m "chore: 数据快照 + 每日要闻 $(date +'%Y-%m-%d %H:%M %Z')" || echo "no changes"
           git push
 
       - name: 启用 GitHub Pages（首次自动开启，之后幂等）
