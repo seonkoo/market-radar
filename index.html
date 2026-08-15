@@ -75,6 +75,17 @@ nav.bottom button.active{color:var(--accent);}
 #toast{position:fixed; left:50%; bottom:74px; transform:translateX(-50%) translateY(80px); background:#1f6feb; color:#fff; padding:10px 16px; border-radius:10px; font-size:13px; box-shadow:0 6px 24px rgba(0,0,0,.5); opacity:0; transition:.3s; z-index:99; max-width:86vw; text-align:center;}
 #toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
 @media(max-width:420px){ .grid2{grid-template-columns:1fr;} h1{font-size:14px;} }
+/* 市场情绪罗盘 */
+.compass{border-radius:14px;padding:14px;margin-bottom:12px;background:linear-gradient(135deg,#1b2330,#11161f);border:1px solid #2a3445;}
+.compass .ttl{font-size:13px;color:#9fb0c3;margin-bottom:6px;}
+.compass .big{font-size:22px;font-weight:800;letter-spacing:1px;}
+.compass .sub{font-size:12px;color:#9fb0c3;margin-top:2px;}
+.compass .bar{height:10px;border-radius:6px;background:#222b39;overflow:hidden;margin:12px 0 6px;position:relative;}
+.compass .bar i{position:absolute;top:0;bottom:0;border-radius:6px;}
+.compass .scale{display:flex;justify-content:space-between;font-size:11px;color:#7d8da3;}
+.compass .dri{font-size:12px;color:#9fb0c3;margin-top:10px;line-height:1.7;}
+.compass .dri b.up{color:#3fb950;} .compass .dri b.down{color:#f85149;}
+.compass .r-on{color:#3fb950;} .compass .r-off{color:#f85149;} .compass .r-flat{color:#d29922;}
 </style>
 </head>
 <body>
@@ -93,6 +104,10 @@ nav.bottom button.active{color:var(--accent);}
     <div class="card">
       <h3>📈 大盘概况</h3>
       <div class="kv" id="idxChips"><span class="chip">加载中…</span></div>
+    </div>
+    <div class="card">
+      <h3>🧭 市场情绪罗盘 <span class="tag">新闻关键词聚合 · 参考</span></h3>
+      <div id="regimeHome"><span class="hint">新闻扫描后显示…</span></div>
     </div>
     <div class="card">
       <h3>📮 今日方向 <span class="tag">每日 08:00 / 15:00 自动抓取快照</span></h3>
@@ -193,6 +208,10 @@ nav.bottom button.active{color:var(--accent);}
   </section>
 
   <section class="tab" id="tab-news">
+    <div class="card">
+      <h3>🧭 市场情绪罗盘 <span class="tag">新闻关键词聚合 · 参考</span></h3>
+      <div id="regimeBox"><span class="hint">新闻扫描后显示…</span></div>
+    </div>
     <div class="card">
       <h3>📰 新闻信号 <span class="tag">关键词频率法 · 参考</span></h3>
       <div id="newsStats" class="hint" style="margin-bottom:8px;">扫描中…</div>
@@ -425,16 +444,17 @@ function renderSnapInfo(){var el=$('snapInfo');if(!state.snapIndex||!state.snapI
   el.innerHTML=('服务器已生成 <b>'+state.snapIndex.length+'</b> 份快照（每天08:00/15:00自动）。<br>'+head);}
 
 var DEFAULT_LEXICON={negatorWindow:10,negators:["严查","打击","收紧"],deniers:["暂未","未落地","落空"],sources:[],keywords:[
-  {kw:"降准",secs:["银行","券商","地产"],dir:1,w:3,cat:"货币"},
-  {kw:"算力",secs:["通信","AI芯片","数据中心"],dir:1,w:3,cat:"科技"},
-  {kw:"集采",secs:["医药"],dir:-1,w:3,cat:"政策"},
-  {kw:"关税",secs:["出口","半导体"],dir:-1,w:3,cat:"海外"},
-  {kw:"北向资金流入",secs:["大盘"],dir:1,w:2,cat:"资金"}
+  {kw:"降准",secs:["银行","券商","地产"],dir:1,w:3,cat:"货币",macro:1},
+  {kw:"算力",secs:["通信","AI芯片","数据中心"],dir:1,w:3,cat:"科技",macro:1},
+  {kw:"集采",secs:["医药"],dir:-1,w:3,cat:"政策",macro:-1},
+  {kw:"关税",secs:["出口","半导体"],dir:-1,w:3,cat:"海外",macro:-1},
+  {kw:"北向资金流入",secs:["大盘"],dir:1,w:2,cat:"资金",macro:1}
 ]};
 async function loadLexicon(){try{var r=await fetch('./lexicon.json',{cache:'no-store'});if(!r.ok)throw 0;var d=await r.json();state.lexicon=d;}catch(e){state.lexicon=DEFAULT_LEXICON;toast('词库加载失败，用内置精简版');}}
 function indicesOf(text,kw){var out=[],i=0,lc=String(text).toLowerCase(),k=(/^[a-z0-9\s]+$/i.test(kw))?kw.toLowerCase():kw;if(!kw)return out;while((i=lc.indexOf(k,i))>=0){out.push(i);i+=Math.max(1,k.length);}return out;}
 function analyzeNews(parts,lex){
   var neg=lex.negators||[],den=lex.deniers||[],win=lex.negatorWindow||10,secMap={},totalHits=0;
+  var onScore=0,offScore=0,onDrivers={},offDrivers={};
   parts.forEach(function(p){
     var text=String(p.t||''),wsrc=p.w||1;
     (lex.keywords||[]).forEach(function(k){
@@ -448,10 +468,26 @@ function analyzeNews(parts,lex){
           if(!secMap[sec])secMap[sec]={score:0,hits:{},count:0};
           secMap[sec].score+=dir*ww;secMap[sec].count+=1;secMap[sec].hits[k.kw]=(secMap[sec].hits[k.kw]||0)+1;totalHits++;
         });
+        // 宏观轴聚合：进攻分 / 避险分（按关键词 macro 方向，不看板块方向）
+        if(k.macro===1){onScore+=ww;onDrivers[k.kw]=(onDrivers[k.kw]||0)+1;}
+        else if(k.macro===-1){offScore+=ww;offDrivers[k.kw]=(offDrivers[k.kw]||0)+1;}
       });
     });
   });
-  return {secMap:secMap,totalHits:totalHits};
+  // 三态判定：净差 / 总量 → 进攻 / 平缓 / 避险
+  var total=onScore+offScore;
+  var net=onScore-offScore;
+  var ratio=total>0?net/total:0;
+  var MIN_TOTAL=3; // 信号太弱不武断判断
+  var regime,label,strength;
+  if(total<MIN_TOTAL){regime='flat';label='平缓（信号不足）';strength=0;}
+  else if(ratio>0.15){regime='on';label='进攻';strength=Math.min(1,ratio);}
+  else if(ratio<-0.15){regime='off';label='避险 / 下跌风险';strength=Math.min(1,Math.abs(ratio));}
+  else {regime='flat';label='平缓';strength=Math.abs(ratio);}
+  function topDrivers(o){return Object.keys(o).sort(function(a,b){return o[b]-o[a];}).slice(0,4);}
+  return {secMap:secMap,totalHits:totalHits,
+    regime:{regime:regime,label:label,onScore:onScore,offScore:offScore,net:net,ratio:ratio,strength:strength,total:total,
+      onDrivers:topDrivers(onDrivers),offDrivers:topDrivers(offDrivers)}};
 }
 async function scanNews(){
   var lex=state.lexicon;if(!lex){return;}
@@ -469,10 +505,33 @@ async function scanNews(){
   state.news={parts:parts.length,res:res,srcStat:srcStat,at:new Date()};
   renderNews();
 }
+function renderRegime(t){
+  var g=state.news.res.regime;if(!g)return;
+  var col=g.regime==='on'?'r-on':(g.regime==='off'?'r-off':'r-flat');
+  var pct=Math.round(g.strength*100);
+  // 强度条：进攻向右(绿)、避险向左(红)、平缓居中灰
+  var barHtml;
+  if(g.regime==='on') barHtml='<i class="'+col+'" style="left:50%;width:'+(pct/2)+'%;background:#3fb950;"></i>';
+  else if(g.regime==='off') barHtml='<i class="'+col+'" style="right:50%;width:'+(pct/2)+'%;background:#f85149;"></i>';
+  else barHtml='<i class="r-flat" style="left:'+(50-pct/2)+'%;width:'+pct+'%;background:#d29922;"></i>';
+  var dri='';
+  if(g.onDrivers.length) dri+='<div class="dri">🔥 进攻线索：'+g.onDrivers.map(function(k){return '<b class="up">'+esc(k)+'</b>';}).join('、')+'</div>';
+  if(g.offDrivers.length) dri+='<div class="dri">🛡 避险线索：'+g.offDrivers.map(function(k){return '<b class="down">'+esc(k)+'</b>';}).join('、')+'</div>';
+  var html='<div class="compass"><div class="ttl">综合 '+state.news.parts+' 条新闻 · 进攻分 '+Math.round(g.onScore)+' / 避险分 '+Math.round(g.offScore)+'</div>'+
+    '<div class="big '+col+'">'+esc(g.label)+'</div>'+
+    '<div class="sub">当前基调偏'+(g.regime==='on'?'风险偏好回升':(g.regime==='off'?'规避风险':'中性均衡'))+'，信号强度 '+pct+'%</div>'+
+    '<div class="bar">'+barHtml+'</div>'+
+    '<div class="scale"><span>避险</span><span>平缓</span><span>进攻</span></div>'+
+    dri+
+    '<div class="dri" style="margin-top:8px;color:#7d8da3;">⚠️ 仅基于新闻关键词频率的弱信号，非预测；最终以行情与你的纪律为准。</div></div>';
+  if($('regimeBox'))$('regimeBox').innerHTML=html;
+  if($('regimeHome'))$('regimeHome').innerHTML=html;
+}
 function renderNews(){
   var el=$('newsList'),box=$('newsStats');if(!el)return;
   if(!state.news){el.innerHTML='<div class="empty">加载中…</div>';return;}
   var r=state.news.res;
+  renderRegime();
   box.innerHTML='扫描 <b>'+state.news.parts+'</b> 条 · 命中 <b>'+r.totalHits+'</b> 个关键词 · 覆盖 <b>'+Object.keys(r.secMap).length+'</b> 个板块　|　来源：'+state.news.srcStat.join('，');
   var secs=Object.keys(r.secMap).map(function(s){return{s:s,v:r.secMap[s]};}).sort(function(a,b){return Math.abs(b.v.score)-Math.abs(a.v.score);});
   if(!secs.length){el.innerHTML='<div class="empty">近 40 条财经新闻未命中关键词，或词库需补充。本信号仅作参考。</div>';return;}
