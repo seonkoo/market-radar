@@ -192,6 +192,19 @@ nav.bottom button.active{color:var(--accent);}
     </div>
   </section>
 
+  <section class="tab" id="tab-news">
+    <div class="card">
+      <h3>📰 新闻信号 <span class="tag">关键词频率法 · 参考</span></h3>
+      <div id="newsStats" class="hint" style="margin-bottom:8px;">扫描中…</div>
+      <div id="newsList"><div class="empty">加载中…</div></div>
+      <div class="row" style="margin-top:10px;">
+        <button class="btn" id="btnScanNews">🔄 重新扫描</button>
+        <button class="btn" id="btnLexicon">📝 查看词库</button>
+      </div>
+      <div class="hint" style="margin-top:10px;">方法：扫描最近财经新闻 → 命中「关键词→板块→方向」词库 → 同板块累加（高频=强）；"严查/打击/收紧"等翻转利好方向，"未/暂未/落空"使利好失效。纯参考，非预测。</div>
+    </div>
+  </section>
+
   <div class="disclaimer">⚠️ 免责声明：本页为个人学习工具，所有评分均为<b>基于行情与资金流的“当前技术定位分”</b>，<b>未纳入新闻 / 国家政策 / 国际时事</b>等变量，不构成投资建议，更非“未来资金流向”的预测。仅作轻量参考，股市有风险，入市需谨慎。</div>
 </div>
 
@@ -200,6 +213,7 @@ nav.bottom button.active{color:var(--accent);}
   <button data-tab="boards"><span class="ic">🏭</span>板块</button>
   <button data-tab="money"><span class="ic">💰</span>资金</button>
   <button data-tab="pool"><span class="ic">🎯</span>定位池</button>
+  <button data-tab="news"><span class="ic">📰</span>新闻</button>
   <button data-tab="mine"><span class="ic">🛡</span>我的</button>
 </nav>
 <div id="toast"></div>
@@ -210,7 +224,7 @@ var UT='b2884a393a59ad64002292a3e90d46a5';
 var state={ industry:[], concept:[], stocks:[], indices:[], hist:{}, loadedAt:null, loading:false,
   reports:lsGet('mr_reports',[]), holdings:lsGet('mr_holdings',[]), checkData:lsGet('mr_check',{}),
   notifOn:lsGet('mr_notif','0')==='1', pushedKey:lsGet('mr_pushed_key',''), lastReportText:'',
-  snapIndex:null, usingSnapshot:false };
+  snapIndex:null, usingSnapshot:false, lexicon:null, news:null };
 
 function lsGet(k,fb){try{var v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch(e){return fb;}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
@@ -410,6 +424,65 @@ function renderSnapInfo(){var el=$('snapInfo');if(!state.snapIndex||!state.snapI
   var head=state.snapIndex.slice(0,3).map(function(r){return '• '+String(r.time).slice(0,16)+' ['+r.status+'] 指数'+r.stats.indices+'/行业'+r.stats.industry+'/概念'+r.stats.concept;}).join('<br>');
   el.innerHTML=('服务器已生成 <b>'+state.snapIndex.length+'</b> 份快照（每天08:00/15:00自动）。<br>'+head);}
 
+var DEFAULT_LEXICON={negatorWindow:10,negators:["严查","打击","收紧"],deniers:["暂未","未落地","落空"],sources:[],keywords:[
+  {kw:"降准",secs:["银行","券商","地产"],dir:1,w:3,cat:"货币"},
+  {kw:"算力",secs:["通信","AI芯片","数据中心"],dir:1,w:3,cat:"科技"},
+  {kw:"集采",secs:["医药"],dir:-1,w:3,cat:"政策"},
+  {kw:"关税",secs:["出口","半导体"],dir:-1,w:3,cat:"海外"},
+  {kw:"北向资金流入",secs:["大盘"],dir:1,w:2,cat:"资金"}
+]};
+async function loadLexicon(){try{var r=await fetch('./lexicon.json',{cache:'no-store'});if(!r.ok)throw 0;var d=await r.json();state.lexicon=d;}catch(e){state.lexicon=DEFAULT_LEXICON;toast('词库加载失败，用内置精简版');}}
+function indicesOf(text,kw){var out=[],i=0,lc=String(text).toLowerCase(),k=(/^[a-z0-9\s]+$/i.test(kw))?kw.toLowerCase():kw;if(!kw)return out;while((i=lc.indexOf(k,i))>=0){out.push(i);i+=Math.max(1,k.length);}return out;}
+function analyzeNews(parts,lex){
+  var neg=lex.negators||[],den=lex.deniers||[],win=lex.negatorWindow||10,secMap={},totalHits=0;
+  parts.forEach(function(p){
+    var text=String(p.t||''),wsrc=p.w||1;
+    (lex.keywords||[]).forEach(function(k){
+      indicesOf(text,k.kw).forEach(function(pp){
+        var before=text.slice(Math.max(0,pp-win),pp);
+        var dir=k.dir;
+        if(den.some(function(n){return before.indexOf(n)>=0;})&&dir>0)return;
+        if(dir>0&&neg.some(function(n){return before.indexOf(n)>=0;}))dir=-dir;
+        var ww=(k.w||1)*wsrc;
+        k.secs.forEach(function(sec){
+          if(!secMap[sec])secMap[sec]={score:0,hits:{},count:0};
+          secMap[sec].score+=dir*ww;secMap[sec].count+=1;secMap[sec].hits[k.kw]=(secMap[sec].hits[k.kw]||0)+1;totalHits++;
+        });
+      });
+    });
+  });
+  return {secMap:secMap,totalHits:totalHits};
+}
+async function scanNews(){
+  var lex=state.lexicon;if(!lex){return;}
+  var parts=[],srcStat=[];
+  for(var si=0;si<lex.sources.length;si++){
+    var src=lex.sources[si],n=0;
+    try{
+      var data=await jsonpGet(src.url,10000,'callback');
+      var arr=(data&&data.result&&data.result.data)?data.result.data:[];
+      arr.forEach(function(it){var t=[it.title,it.intro,it.content,it.summary].filter(Boolean).join(' ');if(t)parts.push({t:t,src:src.name,w:src.weight||1});n++;});
+      srcStat.push(src.name+'（'+n+'条）');
+    }catch(e){srcStat.push(src.name+'（失败）');}
+  }
+  var res=analyzeNews(parts,lex);
+  state.news={parts:parts.length,res:res,srcStat:srcStat,at:new Date()};
+  renderNews();
+}
+function renderNews(){
+  var el=$('newsList'),box=$('newsStats');if(!el)return;
+  if(!state.news){el.innerHTML='<div class="empty">加载中…</div>';return;}
+  var r=state.news.res;
+  box.innerHTML='扫描 <b>'+state.news.parts+'</b> 条 · 命中 <b>'+r.totalHits+'</b> 个关键词 · 覆盖 <b>'+Object.keys(r.secMap).length+'</b> 个板块　|　来源：'+state.news.srcStat.join('，');
+  var secs=Object.keys(r.secMap).map(function(s){return{s:s,v:r.secMap[s]};}).sort(function(a,b){return Math.abs(b.v.score)-Math.abs(a.v.score);});
+  if(!secs.length){el.innerHTML='<div class="empty">近 40 条财经新闻未命中关键词，或词库需补充。本信号仅作参考。</div>';return;}
+  el.innerHTML=secs.slice(0,24).map(function(o){
+    var v=o.v,up=v.score>0;
+    var hits=Object.keys(v.hits).sort(function(a,b){return v.hits[b]-v.hits[a];}).map(function(k){return esc(k)+'×'+v.hits[k];}).join('、');
+    return '<div class="pool-item"><span class="rank '+(up?'t1':'lose')+'">'+(up?'▲':'▼')+'</span><div style="flex:1;"><b>'+esc(o.s)+'</b> <span class="'+(up?'up':'down')+'">'+(up?'+':'')+v.score+'</span><div class="hint" style="margin-top:3px;">命中：'+hits+'（共'+v.count+'次）</div></div></div>';
+  }).join('');
+}
+
 function bindEvents(){
   document.getElementById('nav').addEventListener('click',function(e){var b=e.target.closest('button[data-tab]');if(!b)return;
     document.querySelectorAll('nav.bottom button').forEach(function(x){x.classList.remove('active');});b.classList.add('active');
@@ -424,12 +497,15 @@ function bindEvents(){
   $('tbodyHoldings').addEventListener('click',function(e){var b=e.target.closest('button[data-del]');if(!b)return;state.holdings.splice(+b.dataset.del,1);saveHoldings();renderHoldings();toast('已删除');});
   $('btnCheckSave').addEventListener('click',function(){var key=todayKey();state.checkData[key]={policy:$('cPolicy').value,industry:$('cIndustry').value,fund:$('cFund').value,tech:$('cTech').value,done:true,at:new Date().toLocaleString('zh-CN')};lsSet('mr_check',state.checkData);renderCheck();toast('今日已保存并打卡 ✅');});
   $('checkHistory').addEventListener('click',function(e){var b=e.target.closest('button[data-view]');if(!b)return;var c=state.checkData[b.dataset.view]||{};$('cPolicy').value=c.policy||'';$('cIndustry').value=c.industry||'';$('cFund').value=c.fund||'';$('cTech').value=c.tech||'';$('checkDate').textContent='查看 '+b.dataset.view;});
+  $('btnScanNews').addEventListener('click',function(){if(state.lexicon)scanNews();else toast('词库未就绪');});
+  $('btnLexicon').addEventListener('click',function(){window.open('./lexicon.json','_blank');});
 }
 window.addEventListener('error',function(e){console.error('JS错误',e.message);});
 try{
   bindEvents();renderCheck();renderAll();
   fetch('./snapshots/index.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){state.snapIndex=d;renderSnapInfo();}).catch(function(){});
   loadAll();
+  loadLexicon().then(scanNews);
 }catch(e){toast('启动出错：'+e.message);}
 </script>
 </body>
