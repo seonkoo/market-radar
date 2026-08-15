@@ -6,6 +6,11 @@ on:
     - cron: '0 14 * * *'   # 北京时间 22:00（盘后）
   workflow_dispatch:       # 支持手动触发（首次建库后点一次即可立即启用 Pages）
 
+# 严禁并发：两次运行（手动+定时重叠）排队而非同时 push，避免 main 被 rejected
+concurrency:
+  group: radar-daily
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pages: write
