@@ -83,6 +83,79 @@ def parse_em(raw):
     return out
 
 
+def call_llm(system, user, api_key, base_url, model, timeout=50):
+    """OpenAI 兼容 chat/completions，仅用标准库（无第三方依赖）。"""
+    if not api_key:
+        return None, 'no api key'
+    url = base_url.rstrip('/') + '/chat/completions'
+    body = json.dumps({
+        'model': model,
+        'messages': [{'role': 'system', 'content': system},
+                     {'role': 'user', 'content': user}],
+        'temperature': 0.3,
+        'max_tokens': 1200,
+        'response_format': {'type': 'json_object'}
+    }).encode('utf-8')
+    req = urllib.request.Request(url, data=body, headers={
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + api_key,
+        'User-Agent': 'mr-brief/1.0'
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode('utf-8', 'ignore'))
+        return data['choices'][0]['message']['content'], None
+    except Exception as e:
+        return None, str(e)
+
+
+def llm_summarize(top, regime_label, summary_kw, api_key, base_url, model):
+    """用 LLM 把 top 新闻压缩成综述 + 逐条要点；只基于给定新闻，不预测不荐股。"""
+    if not top:
+        return {'used': False, 'error': 'empty items'}
+    lines = []
+    for i, m in enumerate(top, 1):
+        secs = '、'.join((m.get('secs') or [])[:4]) or '—'
+        lines.append('%d. [%s] %s | 摘要:%s | 涉及:%s' % (
+            i, m.get('macro_dir', ''), m.get('title', ''), m.get('brief', ''), secs))
+    user = ('当前市场基调（词库判定）：%s\n词库综述：%s\n\n'
+            '以下是当日高权重新闻（按重要性排序），请仅基于这些条目做摘要：\n%s\n\n'
+            '要求：只依据上述新闻，不预测后市涨跌、不给出任何买卖/仓位建议、不编造新闻之外内容。\n'
+            '输出严格 JSON：{"summary":"一句总览，须与给定基调方向一致并点出主线",'
+            '"points":["第1条一句话市场解读(含利好/利空/中性方向与涉及板块)","第2条...",...]}\n'
+            'points 数组长度须与新闻条数相同、顺序一致。') % (regime_label, summary_kw, '\n'.join(lines))
+    system = ('你是 A股 市场新闻摘要助手。把给定的财经新闻条目用中文压缩成客观、可追溯的每日综述与逐条要点。'
+              '规则：1) 只能基于提供的新闻，不得编造；2) 不得预测后市涨跌、不得给出任何买卖/仓位建议；'
+              '3) 逐条要点须指出该新闻对市场的方向(利好/利空/中性)及主要涉及板块；'
+              '4) 总览句须与给定的市场基调一致。输出必须是合法 JSON，不要任何解释文字。')
+    content, err = call_llm(system, user, api_key, base_url, model)
+    if not content:
+        return {'used': False, 'error': err or 'empty'}
+    txt = content.strip()
+    if txt.startswith('```'):
+        txt = re.sub(r'^```[a-zA-Z]*\n?', '', txt)
+        txt = txt.rstrip('`').strip()
+    try:
+        obj = json.loads(txt)
+    except Exception:
+        m = re.search(r'\{.*\}', content, re.S)
+        if not m:
+            return {'used': False, 'error': 'json parse fail'}
+        try:
+            obj = json.loads(m.group(0))
+        except Exception as e:
+            return {'used': False, 'error': 'json parse fail: %s' % e}
+    summary = (obj.get('summary') or '').strip()
+    points = obj.get('points') or []
+    if not isinstance(points, list):
+        points = []
+    for i, m in enumerate(top):
+        note = points[i] if i < len(points) else ''
+        if note and isinstance(note, str):
+            m['ai_note'] = note.strip()
+    return {'used': bool(summary or points), 'model': model, 'summary': summary, 'error': None}
+
+
 def indices_of(text, kw):
     out = []
     i = 0
@@ -212,18 +285,44 @@ def main():
         sp.append('进攻线索：' + '、'.join(on_drivers))
     if off_drivers:
         sp.append('避险线索：' + '、'.join(off_drivers))
-    summary = '；'.join(sp) if sp else '当日新闻未触发显著关键词信号。'
+    summary_kw = '；'.join(sp) if sp else '当日新闻未触发显著关键词信号。'
+    summary = summary_kw
+
+    # ---- LLM 辅助简报（可选；无 key / 失败自动回退词库，绝不阻塞主流程） ----
+    llm = {'used': False, 'model': None, 'error': None}
+    providers = [
+        ('ZHIPU_API_KEY', 'https://open.bigmodel.cn/api/paas/v4', 'glm-4-flash'),
+        ('SILICONFLOW_API_KEY', 'https://api.siliconflow.cn/v1', 'Qwen/Qwen3-8B'),
+    ]
+    for envk, base, model in providers:
+        key = (os.environ.get(envk) or '').strip()
+        if not key:
+            continue
+        try:
+            res = llm_summarize(top, label, summary_kw, key, base, model)
+        except Exception as e:
+            res = {'used': False, 'error': str(e)}
+        if res and res.get('used'):
+            llm = {'used': True, 'model': model, 'error': res.get('error')}
+            if res.get('summary'):
+                summary = res['summary']
+            break
+        else:
+            llm = {'used': False, 'model': model, 'error': (res or {}).get('error')}
+    src_suffix = (' · 🤖AI辅助(%s)' % llm['model']) if llm['used'] else ' · 词库生成'
 
     brief = {
         'generated_at': TODAY.strftime('%Y-%m-%d %H:%M'),
         'date': TODAY.strftime('%Y-%m-%d'),
-        'source': ' | '.join(src_stat),
+        'source': ' | '.join(src_stat) + src_suffix,
         'regime': {'regime': regime, 'label': label, 'onScore': round(on, 1),
                    'offScore': round(off, 1), 'strength': round(strength, 2)},
         'summary': summary,
+        'summary_kw': summary_kw,
+        'llm': llm,
         'items': [{'title': m['title'], 'brief': m['brief'], 'dir': m['macro_dir'],
                    'secs': m['secs'], 'kws': m['kws'], 'src': m['src'], 'time': m['time'],
-                   'weight': m['weight']} for m in top]
+                   'weight': m['weight'], 'ai_note': m.get('ai_note', '')} for m in top]
     }
     out_path = os.path.join(here, 'brief.json')
     with open(out_path, 'w', encoding='utf-8') as f:
