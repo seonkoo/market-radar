@@ -94,6 +94,10 @@ nav.bottom button.active{color:var(--accent);}
 .bdir.down{color:#f85149;background:rgba(248,81,73,.12);}
 .bdir.flatc{color:#d29922;background:rgba(210,153,34,.12);}
 .b-summary{font-size:12.5px;line-height:1.7;color:#cdd9e5;background:#161d28;border:1px solid #2a3445;border-radius:10px;padding:9px 11px;margin:10px 0;}
+/* AI 辅助解读 */
+.ai-note{font-size:12px;line-height:1.6;color:#aebfd1;background:rgba(88,140,220,.10);border-left:3px solid #5884dc;padding:5px 8px;border-radius:6px;margin-top:5px;}
+.ai-tag{display:inline-block;font-size:10px;font-weight:700;color:#fff;background:#5884dc;border-radius:5px;padding:1px 5px;margin-right:5px;vertical-align:middle;}
+.ai-badge{display:inline-block;font-size:10.5px;color:#9db8e8;background:rgba(88,140,220,.14);border:1px solid rgba(88,140,220,.4);border-radius:8px;padding:1px 7px;margin-left:6px;vertical-align:middle;}
 </style>
 </head>
 <body>
@@ -642,6 +646,7 @@ function briefItemsHtml(items,limit){
       (m.brief?'<div class="hint" style="margin-top:2px;">'+esc(m.brief)+'</div>':'')+
       (secs?'<div class="hint" style="margin-top:2px;color:#7d8da3;">涉及：'+secs+'</div>':'')+
       (meta?'<div class="hint" style="margin-top:1px;color:#5e6b7d;">'+esc(meta)+'</div>':'')+
+      (m.ai_note?'<div class="ai-note"><span class="ai-tag">AI</span>'+esc(m.ai_note)+'</div>':'')+
       '</div></div>';
   }).join('');
 }
@@ -649,11 +654,12 @@ function renderBrief(b){
   if(!b)return;state.brief=b;
   var meta=$('briefMeta');if(meta)meta.innerHTML='生成于 <b>'+esc(b.generated_at||'')+'</b> · '+(b.fromServer===false?'<span style="color:#d29922;">实时</span>':'<span style="color:#3fb950;">服务器快照</span>')+(b.source?' · '+esc(b.source):'');
   var rg=$('briefRegime');if(rg)rg.innerHTML=briefRegimeHtml(b.regime);
-  var sm=$('briefSummary');if(sm)sm.innerHTML='<b>今日综述：</b>'+esc(b.summary||'');
+  var llmBadge=(b.llm&&b.llm.used)?' <span class="ai-badge">🤖 AI 辅助 · '+esc(b.llm.model||'')+'</span>':'';
+  var sm=$('briefSummary');if(sm)sm.innerHTML='<b>今日综述：</b>'+esc(b.summary||'')+llmBadge;
   var ls=$('briefList');if(ls)ls.innerHTML=briefItemsHtml(b.items,14);
   var hm=$('briefHomeMeta');if(hm)hm.innerHTML=(b.fromServer===false?'实时生成':'生成于 '+esc(b.generated_at||''))+(b.source?' · '+esc(b.source):'');
   var hr=$('briefHomeRegime');if(hr)hr.innerHTML=briefRegimeHtml(b.regime);
-  var hs=$('briefHomeSummary');if(hs)hs.innerHTML='<b>今日综述：</b>'+esc(b.summary||'');
+  var hs=$('briefHomeSummary');if(hs)hs.innerHTML='<b>今日综述：</b>'+esc(b.summary||'')+llmBadge;
   var hl=$('briefHomeList');if(hl)hl.innerHTML=briefItemsHtml(b.items,5);
 }
 async function loadBrief(){
