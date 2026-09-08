@@ -1,5 +1,18 @@
 [
   {
+    "time": "2026-09-09T01:39:22+08:00",
+    "status": "ok",
+    "stats": {
+      "indices": 6,
+      "industry": 30,
+      "concept": 30,
+      "stocks": 12,
+      "hist_ok": 12,
+      "hist_fail": 8
+    },
+    "file": "snapshots/2026-09-09-0139.json"
+  },
+  {
     "time": "2026-09-08T12:55:16+08:00",
     "status": "ok",
     "stats": {
